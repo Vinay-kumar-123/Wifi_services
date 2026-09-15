@@ -1,0 +1,49 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // ─── Default deny all ───────────────────────────────────────────────────
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // ─── Complaint attachments ──────────────────────────────────────────────
+    // Read: Only authenticated users. Firestore rules enforce which complaint
+    // IDs a user can actually access — storage path alone cannot replicate
+    // Firestore ownership without a Firestore lookup (not available in Storage
+    // rules). Accepting authenticated-only read as the practical boundary;
+    // URLs are not guessable (UUID-based complaint IDs + timestamped filenames).
+    //
+    // Write: Authenticated users may upload. Size < 10MB, valid image or PDF.
+    match /complaints/{complaintId}/{fileName} {
+      allow read: if isAuthenticated();
+
+      allow write: if isAuthenticated()
+        && request.resource.size < 10 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('image/.*')
+          || request.resource.contentType == 'application/pdf'
+        );
+
+      // No client-side delete of attachments
+      allow delete: if false;
+    }
+
+    // ─── User avatars ───────────────────────────────────────────────────────
+    match /avatars/{userId}/{fileName} {
+      allow read: if isAuthenticated();
+
+      allow write: if isAuthenticated()
+        && request.auth.uid == userId
+        && request.resource.size < 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+  }
+}

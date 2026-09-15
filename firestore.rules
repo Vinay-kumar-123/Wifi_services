@@ -1,0 +1,209 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function currentUserData() {
+      return getUserData(request.auth.uid);
+    }
+
+    function isActiveUser() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        currentUserData().isActive == true;
+    }
+
+    function hasRole(roleName) {
+      return isActiveUser() && currentUserData().role == roleName;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isTechnician() {
+      return hasRole('technician');
+    }
+
+    function isCustomer() {
+      return hasRole('customer');
+    }
+
+    // ===============================================================
+    // USERS COLLECTION
+    // ===============================================================
+    match /users/{userId} {
+      // Authenticated users can only read their own profile. Only Admins can inspect all user profiles.
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+
+      // On registration, users can only create their own document with default role 'customer'
+      allow create: if isAuthenticated() 
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.role == 'customer'
+        && request.resource.data.isActive == true
+        && request.resource.data.email == request.auth.token.email;
+
+      // Updating user profile:
+      // - Admins can update roles and activation status
+      // - Customers/Technicians can only update their own non-security profile fields (displayName, phone, photoURL)
+      // - Non-admins CANNOT modify role, uid, isActive, or createdAt
+      allow update: if isAuthenticated() && (
+        isAdmin() || (
+          request.auth.uid == userId &&
+          isActiveUser() &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.isActive == resource.data.isActive &&
+          request.resource.data.email == resource.data.email &&
+          request.resource.data.createdAt == resource.data.createdAt
+        )
+      );
+
+      // Users cannot be deleted from client SDK
+      allow delete: if false;
+    }
+
+    // ===============================================================
+    // COMPLAINTS COLLECTION
+    // ===============================================================
+    match /complaints/{complaintId} {
+      // Read permissions:
+      // - Customer: strictly only if customerId == request.auth.uid
+      // - Technician: strictly only if assignedTechnicianId == request.auth.uid
+      // - Admin: all complaints
+      allow read: if isAuthenticated() && isActiveUser() && (
+        isAdmin() ||
+        (isCustomer() && resource.data.customerId == request.auth.uid) ||
+        (isTechnician() && resource.data.assignedTechnicianId == request.auth.uid)
+      );
+
+      // Create complaint:
+      // - Customers can create their own complaints
+      // - Initial status MUST be 'open'
+      // - assignedTechnicianId and assignedTechnicianName MUST be null (No auto-assignment!)
+      allow create: if isAuthenticated() && isActiveUser() && isCustomer()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == 'open'
+        && request.resource.data.assignedTechnicianId == null
+        && request.resource.data.assignedTechnicianName == null;
+
+      // Update complaint:
+      // - Admin: full management rights
+      // - Customer: can ONLY cancel their own complaint if status is currently 'open'
+      // - Technician: can only update complaints assigned to their own UID
+      allow update: if isAuthenticated() && isActiveUser() && (
+        isAdmin() ||
+        // Customer cancel rule: open -> cancelled
+        (
+          isCustomer() &&
+          resource.data.customerId == request.auth.uid &&
+          resource.data.status == 'open' &&
+          request.resource.data.status == 'cancelled' &&
+          request.resource.data.customerId == resource.data.customerId &&
+          request.resource.data.assignedTechnicianId == resource.data.assignedTechnicianId
+        ) ||
+        // Technician update rule:
+        (
+          isTechnician() &&
+          resource.data.assignedTechnicianId == request.auth.uid &&
+          request.resource.data.assignedTechnicianId == resource.data.assignedTechnicianId &&
+          request.resource.data.customerId == resource.data.customerId &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.status != 'closed' &&
+          request.resource.data.status != 'cancelled' &&
+          (
+            // Flow: assigned -> accepted
+            (resource.data.status == 'assigned' && request.resource.data.status == 'accepted') ||
+            // Flow: accepted -> in_progress
+            (resource.data.status == 'accepted' && request.resource.data.status == 'in_progress') ||
+            // Flow: in_progress -> in_progress (work note updates)
+            (resource.data.status == 'in_progress' && request.resource.data.status == 'in_progress') ||
+            // Flow: in_progress -> resolved (requires mandatory resolution notes >= 10 chars)
+            (
+              resource.data.status == 'in_progress' &&
+              request.resource.data.status == 'resolved' &&
+              request.resource.data.resolutionNotes is string &&
+              request.resource.data.resolutionNotes.size() >= 10
+            )
+          )
+        )
+      );
+
+      // No client-side deletion of complaints
+      allow delete: if false;
+
+      // History subcollection
+      match /history/{historyId} {
+        allow read: if isAuthenticated() && isActiveUser() && (
+          isAdmin() ||
+          (isCustomer() && get(/databases/$(database)/documents/complaints/$(complaintId)).data.customerId == request.auth.uid) ||
+          (isTechnician() && get(/databases/$(database)/documents/complaints/$(complaintId)).data.assignedTechnicianId == request.auth.uid)
+        );
+
+        allow create: if isAuthenticated() && isActiveUser() && (
+          isAdmin() ||
+          (isCustomer() && request.resource.data.changedBy == request.auth.uid) ||
+          (isTechnician() && request.resource.data.changedBy == request.auth.uid)
+        );
+
+        allow update, delete: if false;
+      }
+    }
+
+    // ===============================================================
+    // NOTIFICATIONS COLLECTION
+    // ===============================================================
+    match /notifications/{notificationId} {
+      // Read: Only the recipient can read their own notifications
+      allow read: if isAuthenticated() && resource.data.recipientId == request.auth.uid;
+
+      // Update: Only allow marking as read (isRead + readAt fields only)
+      allow update: if isAuthenticated()
+        && resource.data.recipientId == request.auth.uid
+        && request.resource.data.recipientId == resource.data.recipientId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt']);
+
+      // Create: Active users can create notifications (complaint service sends
+      // notifications on behalf of workflow actions). The data model ensures
+      // each notification is sent to a specific recipientId — the service layer
+      // is the enforcement boundary for who gets what notification.
+      allow create: if isAuthenticated() && isActiveUser()
+        && request.resource.data.recipientId is string
+        && request.resource.data.recipientId.size() > 0
+        && request.resource.data.title is string
+        && request.resource.data.message is string
+        && request.resource.data.isRead == false;
+
+      // Notifications are permanent records — no deletion from client
+      allow delete: if false;
+    }
+
+    // ===============================================================
+    // AUDIT LOGS COLLECTION
+    // ===============================================================
+    match /auditLogs/{logId} {
+      // Secure Admin-Only Read Access
+      allow read: if isAuthenticated() && isAdmin();
+
+      // Creation allowed by active authenticated users when performing auditable actions
+      allow create: if isAuthenticated() && isActiveUser() && request.resource.data.actorId == request.auth.uid;
+
+      // Immutable: Never permit client updates or deletions
+      allow update, delete: if false;
+    }
+  }
+}
