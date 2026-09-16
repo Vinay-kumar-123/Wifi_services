@@ -49,20 +49,37 @@ service cloud.firestore {
       // Authenticated users can only read their own profile. Only Admins can inspect all user profiles.
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
 
-      // On registration, users can only create their own document with default role 'customer'
-      allow create: if isAuthenticated() 
+      // Customers create only their own customer profile. Admins may create a
+      // profile for an Auth account that was created manually in Firebase.
+      allow create: if (
+        isAuthenticated()
         && request.auth.uid == userId
         && request.resource.data.uid == userId
         && request.resource.data.role == 'customer'
         && request.resource.data.isActive == true
-        && request.resource.data.email == request.auth.token.email;
+        && request.resource.data.email == request.auth.token.email
+      ) || (
+        isAdmin()
+        && request.resource.data.uid == userId
+        && request.resource.data.role == 'technician'
+        && request.resource.data.isActive == true
+        && request.resource.data.fullName is string
+        && request.resource.data.displayName is string
+        && request.resource.data.email is string
+        && request.resource.data.phone is string
+        && request.resource.data.employeeId is string
+        && request.resource.data.serviceArea is string
+        && request.resource.data.specialization is string
+        && request.resource.data.createdAt is timestamp
+      );
 
       // Updating user profile:
-      // - Admins can update roles and activation status
+      // - Admins can update only permitted role and activation fields
       // - Customers/Technicians can only update their own non-security profile fields (displayName, phone, photoURL)
       // - Non-admins CANNOT modify role, uid, isActive, or createdAt
       allow update: if isAuthenticated() && (
-        isAdmin() || (
+        (isAdmin() && request.auth.uid != userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'isActive', 'updatedAt'])) || (
           request.auth.uid == userId &&
           isActiveUser() &&
           request.resource.data.role == resource.data.role &&
@@ -70,6 +87,7 @@ service cloud.firestore {
           request.resource.data.isActive == resource.data.isActive &&
           request.resource.data.email == resource.data.email &&
           request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'phone', 'photoURL', 'updatedAt'])
         )
       );
 
@@ -102,11 +120,39 @@ service cloud.firestore {
         && request.resource.data.assignedTechnicianName == null;
 
       // Update complaint:
-      // - Admin: full management rights
+      // - Admin: assignment, internal notes, and closure only; ownership and
+      //   original creation data are immutable from the client.
       // - Customer: can ONLY cancel their own complaint if status is currently 'open'
       // - Technician: can only update complaints assigned to their own UID
       allow update: if isAuthenticated() && isActiveUser() && (
-        isAdmin() ||
+        (
+          isAdmin()
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'assignedTechnicianId', 'assignedTechnicianName',
+            'assignedAt', 'dispatchNotes', 'internalNotes', 'closedAt', 'updatedAt'
+          ])
+          && (
+            (
+              resource.data.status in ['open', 'assigned']
+              && request.resource.data.status == 'assigned'
+              && request.resource.data.assignedTechnicianId is string
+              && exists(/databases/$(database)/documents/users/$(request.resource.data.assignedTechnicianId))
+              && get(/databases/$(database)/documents/users/$(request.resource.data.assignedTechnicianId)).data.role == 'technician'
+              && get(/databases/$(database)/documents/users/$(request.resource.data.assignedTechnicianId)).data.isActive == true
+              && request.resource.data.assignedTechnicianName is string
+              && request.resource.data.assignedAt is timestamp
+              && (request.resource.data.dispatchNotes == null || request.resource.data.dispatchNotes is string)
+            ) || (
+              resource.data.status == 'resolved'
+              && request.resource.data.status == 'closed'
+            ) || (
+              request.resource.data.status == resource.data.status
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['internalNotes', 'updatedAt'])
+            )
+          )
+        ) ||
         // Customer cancel rule: open -> cancelled
         (
           isCustomer() &&
@@ -114,7 +160,8 @@ service cloud.firestore {
           resource.data.status == 'open' &&
           request.resource.data.status == 'cancelled' &&
           request.resource.data.customerId == resource.data.customerId &&
-          request.resource.data.assignedTechnicianId == resource.data.assignedTechnicianId
+          request.resource.data.assignedTechnicianId == resource.data.assignedTechnicianId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
         ) ||
         // Technician update rule:
         (
@@ -123,21 +170,25 @@ service cloud.firestore {
           request.resource.data.assignedTechnicianId == resource.data.assignedTechnicianId &&
           request.resource.data.customerId == resource.data.customerId &&
           request.resource.data.createdAt == resource.data.createdAt &&
-          request.resource.data.status != 'closed' &&
-          request.resource.data.status != 'cancelled' &&
+            request.resource.data.status != 'closed' &&
+            request.resource.data.status != 'cancelled' &&
           (
             // Flow: assigned -> accepted
-            (resource.data.status == 'assigned' && request.resource.data.status == 'accepted') ||
+            (resource.data.status == 'assigned' && request.resource.data.status == 'accepted' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt', 'updatedAt'])) ||
             // Flow: accepted -> in_progress
-            (resource.data.status == 'accepted' && request.resource.data.status == 'in_progress') ||
+            (resource.data.status == 'accepted' && request.resource.data.status == 'in_progress' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'inProgressAt', 'updatedAt'])) ||
             // Flow: in_progress -> in_progress (work note updates)
-            (resource.data.status == 'in_progress' && request.resource.data.status == 'in_progress') ||
+            (resource.data.status == 'in_progress' && request.resource.data.status == 'in_progress' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt'])) ||
             // Flow: in_progress -> resolved (requires mandatory resolution notes >= 10 chars)
             (
               resource.data.status == 'in_progress' &&
               request.resource.data.status == 'resolved' &&
               request.resource.data.resolutionNotes is string &&
-              request.resource.data.resolutionNotes.size() >= 10
+              request.resource.data.resolutionNotes.size() >= 10 &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'resolutionNotes', 'resolvedAt', 'updatedAt'])
             )
           )
         )
@@ -177,13 +228,10 @@ service cloud.firestore {
         && request.resource.data.recipientId == resource.data.recipientId
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt']);
 
-      // Create: Active users can create notifications (complaint service sends
-      // notifications on behalf of workflow actions). The data model ensures
-      // each notification is sent to a specific recipientId — the service layer
-      // is the enforcement boundary for who gets what notification.
+      // Client-created notifications can only be created for the caller. A
+      // trusted server is required to safely fan notifications out to others.
       allow create: if isAuthenticated() && isActiveUser()
-        && request.resource.data.recipientId is string
-        && request.resource.data.recipientId.size() > 0
+        && request.resource.data.recipientId == request.auth.uid
         && request.resource.data.title is string
         && request.resource.data.message is string
         && request.resource.data.isRead == false;

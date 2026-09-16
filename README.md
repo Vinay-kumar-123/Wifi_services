@@ -13,7 +13,7 @@
 | Routing | React Router v7 with role-based guards |
 | Forms | React Hook Form + Zod validation |
 | Charts | Recharts 2 |
-| Backend | Firebase Auth, Cloud Firestore, Storage, Cloud Functions (v2) |
+| Backend | Firebase Auth, Cloud Firestore, Storage (Spark-compatible client workflow) |
 | Testing | Vitest 5, @firebase/rules-unit-testing |
 | CI/Build | Vite rollup with code-split vendor chunks |
 
@@ -27,7 +27,7 @@
 | `technician` | Sees only assigned tickets, accepts, works, resolves |
 | `admin` | Full system access: assigns technicians, manages users/roles, views analytics and audit logs |
 
-> **Security Guarantee**: New registrations are **always** created as `customer`. Role changes are Cloud Function-only operations performed exclusively by active administrators.
+> **Security Guarantee**: New registrations are **always** created as `customer`. Technician assignment and status transitions are validated by Firestore Rules and performed from the same React application.
 
 ---
 
@@ -98,8 +98,7 @@ npm install
 2. Enable **Email/Password** authentication.
 3. Create a **Firestore** database (production mode — rules are in `firestore.rules`).
 4. Enable **Cloud Storage**.
-5. Deploy **Cloud Functions** (see below).
-6. Copy the web app config from **Project Settings → General → Your apps**.
+5. Copy the web app config from **Project Settings → General → Your apps**.
 
 ```bash
 cp .env.example .env
@@ -114,25 +113,20 @@ firebase use your-project-id
 firebase deploy --only firestore:rules,firestore:indexes,storage
 ```
 
-### 4. Deploy Cloud Functions
-
-```bash
-cd functions
-npm install
-cd ..
-firebase deploy --only functions
-```
-
-### 5. Run Development Server
+### 4. Run Development Server
 
 ```bash
 npm run dev
 # App runs at http://localhost:3000
 ```
 
-### 6. Bootstrap Admin Account
+### 5. Bootstrap Admin Account
 
 After your first registration, go to Firebase Console → Firestore → `users/{uid}` and manually set `role: "admin"`. All subsequent role changes are made through the Admin Users interface.
+
+### Manual Technician Setup (Spark Plan)
+
+Cloud Functions are not required for the technician workflow. Create the technician's email/password account in Firebase Console → Authentication → Users, copy its UID, then open Admin → Users → Add Technician and save a profile using that UID. The profile must contain the technician's full name, email, phone, employee ID, service area, specialization, `role: "technician"`, `isActive: true`, and `createdAt`. The technician then signs in through the shared login page.
 
 ---
 
@@ -262,9 +256,9 @@ All chunks < 450 kB uncompressed
 3. **Customer Isolation**: `resource.data.customerId == request.auth.uid` enforced in Firestore rules.
 4. **Technician Isolation**: `resource.data.assignedTechnicianId == request.auth.uid` enforced in Firestore rules.
 5. **No Automatic Assignment**: `assignedTechnicianId` must be `null` on complaint creation. Enforced in Firestore rules.
-6. **Mandatory Resolution Notes**: `resolutionNotes.size() >= 10` enforced in Firestore rules AND Cloud Functions. Both layers enforce independently.
-7. **Admin-Only Privileged Operations**: Role changes, account activation/deactivation, and ticket closure are Cloud Functions enforcing server-side role and active status checks.
-8. **Self-Modification Guards**: Cloud Functions reject `callerUid === targetUserId` for role changes and deactivation.
+6. **Mandatory Resolution Notes**: `resolutionNotes.size() >= 10` enforced in Firestore rules.
+7. **Admin-Only Assignment**: Only active admins can assign or reassign active technicians; assignment preserves customer ownership and `createdAt` and uses an allowlisted field diff.
+8. **Technician Status Isolation**: Technicians can update only their assigned complaint and only the fields for the permitted next status transition.
 9. **Audit Log Immutability**: `allow update, delete: if false` in Firestore rules. No client can alter audit history.
 10. **Real-Time Revocation**: `AuthContext` subscribes to `users/{uid}` in real-time. Deactivated accounts are immediately logged out without requiring a page refresh.
 11. **Notification Isolation**: Notifications enforce `recipientId == request.auth.uid` for reads; create validates required fields including `isRead == false`.
@@ -275,7 +269,7 @@ All chunks < 450 kB uncompressed
 |---|---|---|
 | 1 | Storage `allow delete: if false` was missing for complaint attachments | Added explicit delete deny |
 | 2 | Notification `create` had no field validation | Added `recipientId`, `title`, `message`, `isRead == false` checks |
-| 3 | `assignTechnician` Cloud Function only notified technician, not customer | Added customer notification in CF |
+| 3 | Assignment depended on a Blaze-only callable function | Replaced with a direct Firestore assignment path and strict rules |
 | 4 | `technicianUpdateStatus` CF allowed `accepted → resolved` (inconsistent with Firestore rules) | Restricted to `in_progress → resolved` only |
 | 5 | `emulator-data/` not in `.gitignore` | Added |
 | 6 | `functions/node_modules/` not in `.gitignore` | Added |
@@ -295,11 +289,7 @@ Key composite indexes:
 | Collection | Fields |
 |---|---|
 | `complaints` | `customerId` + `createdAt DESC` |
-| `complaints` | `customerId` + `status` + `createdAt DESC` |
-| `complaints` | `assignedTechnicianId` + `status` + `createdAt DESC` |
-| `complaints` | `status` + `priority` + `createdAt DESC` |
-| `notifications` | `recipientId` + `createdAt DESC` |
-| `notifications` | `recipientId` + `isRead` + `createdAt DESC` |
+| `complaints` | `assignedTechnicianId` + `createdAt DESC` |
 | `auditLogs` | `action` + `createdAt DESC` |
 | `users` | `role` + `isActive` + `createdAt DESC` |
 

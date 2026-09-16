@@ -15,6 +15,7 @@ import toast from 'react-hot-toast';
 import { getActiveTechniciansWithWorkload } from '@/services/users/userService';
 import { assignTechnicianToComplaint } from '@/services/complaints/complaintService';
 import { useAuth } from '@/context/AuthContext';
+import { getFirestoreErrorMessage } from '@/utils/firebaseErrors';
 
 export const AssignTechnicianModal = ({
   isOpen,
@@ -79,17 +80,13 @@ export const AssignTechnicianModal = ({
         isReassignment,
       });
 
-      toast.success(
-        isReassignment
-          ? `Complaint reassigned to ${selectedTech.displayName || 'technician'}.`
-          : `Technician ${selectedTech.displayName || ''} successfully assigned!`
-      );
+      toast.success('Technician assigned successfully');
 
       if (onSuccess) onSuccess();
       onClose();
     } catch (err) {
       console.error('Error assigning technician:', err);
-      toast.error(err.message || 'Failed to assign technician.');
+      toast.error(getFirestoreErrorMessage(err, 'assign technician'));
     } finally {
       setSubmitting(false);
     }
@@ -216,6 +213,12 @@ export const AssignTechnicianModal = ({
                         <div className="flex items-center space-x-3 text-[11px] text-slate-500 mt-0.5">
                           <span>{tech.email}</span>
                           {tech.phone && <span>· {tech.phone}</span>}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500 mt-1">
+                          {tech.employeeId && <span>ID: {tech.employeeId}</span>}
+                          {tech.serviceArea && <span>Area: {tech.serviceArea}</span>}
+                          {tech.specialization && <span>{tech.specialization}</span>}
+                          <span className="font-semibold text-emerald-700">Active</span>
                         </div>
                       </div>
                     </div>

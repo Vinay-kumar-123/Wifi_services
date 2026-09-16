@@ -19,8 +19,7 @@ import {
   uploadBytes,
   getDownloadURL,
 } from 'firebase/storage';
-import { httpsCallable } from 'firebase/functions';
-import { db, storage, functions } from '@/services/firebase/firebaseConfig';
+import { db, storage } from '@/services/firebase/firebaseConfig';
 import { COMPLAINT_STATUS } from '@/constants/complaintStatus';
 import { ROLES } from '@/constants/roles';
 import { createNotification } from '@/services/notifications/notificationService';
@@ -526,14 +525,68 @@ export const assignTechnicianToComplaint = async (
     throw new Error('Complaint, Technician, and Admin details are required.');
   }
 
-  const assignTechnician = httpsCallable(functions, 'assignTechnician');
-  const response = await assignTechnician({
-    complaintId,
-    technicianId: technician.uid,
-    assignmentNote: note,
+  const complaintRef = doc(db, 'complaints', complaintId);
+  const complaintSnap = await getDoc(complaintRef);
+  if (!complaintSnap.exists()) throw new Error('Complaint not found.');
+
+  const complaintData = complaintSnap.data();
+  if (![COMPLAINT_STATUS.OPEN, COMPLAINT_STATUS.ASSIGNED].includes(complaintData.status)) {
+    throw new Error('Only open or assigned complaints can be assigned or reassigned.');
+  }
+
+  const technicianName = technician.displayName || technician.fullName;
+  if (!technician.uid || !technicianName || technician.isActive !== true) {
+    throw new Error('The selected technician is not active or has an incomplete profile.');
+  }
+
+  await updateDoc(complaintRef, {
+    status: COMPLAINT_STATUS.ASSIGNED,
+    assignedTechnicianId: technician.uid,
+    assignedTechnicianName: technicianName,
+    assignedAt: serverTimestamp(),
+    dispatchNotes: note?.trim() || null,
+    updatedAt: serverTimestamp(),
   });
 
-  return response.data;
+  try {
+    await addDoc(collection(db, 'complaints', complaintId, 'history'), {
+      complaintId,
+      changedBy: adminUser.uid,
+      changedByName: adminUser.displayName || 'Administrator',
+      changedByRole: ROLES.ADMIN,
+      fromStatus: complaintData.status,
+      toStatus: COMPLAINT_STATUS.ASSIGNED,
+      note: note?.trim() || `Assigned to ${technicianName}.`,
+      createdAt: serverTimestamp(),
+    });
+
+    await addDoc(collection(db, 'auditLogs'), {
+      actorId: adminUser.uid,
+      actorName: adminUser.displayName || 'Administrator',
+      actorRole: ROLES.ADMIN,
+      action: complaintData.assignedTechnicianId ? 'TECHNICIAN_REASSIGNED' : 'TECHNICIAN_ASSIGNED',
+      targetType: 'complaint',
+      targetId: complaintId,
+      metadata: { technicianId: technician.uid, technicianName, dispatchNotes: note?.trim() || null },
+      createdAt: serverTimestamp(),
+    });
+  } catch (auditErr) {
+    console.warn('Assignment history or audit write failed:', auditErr);
+  }
+
+  try {
+    await createNotification({
+      recipientId: technician.uid,
+      title: 'New Complaint Assignment',
+      message: `Ticket #${complaintId.slice(0, 8)} has been assigned to you.`,
+      type: 'assignment',
+      relatedComplaintId: complaintId,
+    });
+  } catch (notificationErr) {
+    console.warn('Assignment notification unavailable:', notificationErr);
+  }
+
+  return { success: true, complaintId, technicianId: technician.uid };
 };
 
 /**

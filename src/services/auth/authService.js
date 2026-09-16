@@ -13,38 +13,8 @@ import {
   serverTimestamp,
   addDoc,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { auth, db, functions } from '@/services/firebase/firebaseConfig';
+import { auth, db } from '@/services/firebase/firebaseConfig';
 import { ROLES } from '@/constants/roles';
-
-const getTechnicianCreationError = (error) => {
-  const code = error?.code || '';
-  const message = error?.message || '';
-
-  if (code.includes('unauthenticated')) {
-    return new Error('Your session has expired. Please sign in again.');
-  }
-  if (code.includes('permission-denied')) {
-    return new Error('Only active administrators can create technician accounts.');
-  }
-  if (code.includes('already-exists')) {
-    return new Error('A user with this email or employee ID already exists.');
-  }
-  if (code.includes('invalid-argument')) {
-    return new Error(message || 'Please check the technician details and try again.');
-  }
-  if (code.includes('failed-precondition')) {
-    return new Error(message || 'Technician account creation is not currently available.');
-  }
-  if (code.includes('unavailable') || code.includes('deadline-exceeded')) {
-    return new Error('The technician service is temporarily unavailable. Please try again.');
-  }
-  if (code.includes('internal') || code.includes('unknown') || /cors|network|fetch/i.test(message)) {
-    return new Error('The technician service could not be reached. Verify the deployed us-central1 Function and try again.');
-  }
-
-  return error instanceof Error ? error : new Error('Unable to create technician account.');
-};
 
 /**
  * Register a new user with email and password.
@@ -97,11 +67,12 @@ export const registerUser = async ({ displayName, email, phone, password }) => {
 };
 
 /**
- * Create a technician account through the privileged Cloud Function.
- * The browser must never create this Auth user because that would replace the
- * currently signed-in administrator in the client Auth instance.
+ * Create a technician profile for an Auth account created manually in Firebase
+ * Authentication. The UID is supplied by the administrator and must match the
+ * Auth account that was created outside this application.
  */
 export const createTechnicianAccount = async ({
+  uid,
   fullName,
   email,
   phone,
@@ -111,39 +82,34 @@ export const createTechnicianAccount = async ({
   specialization,
   photoURL,
 }) => {
-  if (!fullName?.trim() || !email?.trim() || !phone?.trim()) {
-    throw new Error('Full name, email address, and phone number are required.');
+  if (!uid?.trim() || !fullName?.trim() || !email?.trim() || !phone?.trim()) {
+    throw new Error('Firebase Auth UID, full name, email address, and phone number are required.');
   }
 
-  let response;
-  try {
-    const createTechnician = httpsCallable(functions, 'createTechnician');
-    response = await createTechnician({
-      fullName: fullName.trim(),
-      email: email.trim().toLowerCase(),
-      phone: phone.trim(),
-      address: address?.trim() || '',
-      employeeId: employeeId?.trim() || '',
-      serviceArea: serviceArea?.trim() || '',
-      specialization: specialization?.trim() || '',
-      photoURL: photoURL?.trim() || null,
-    });
-  } catch (error) {
-    throw getTechnicianCreationError(error);
-  }
-
-  let setupEmailSent = false;
-  try {
-    await sendPasswordResetEmail(auth, email.trim().toLowerCase());
-    setupEmailSent = true;
-  } catch (emailError) {
-    console.warn('Technician setup email could not be sent:', emailError);
-  }
-
-  return {
-    ...response.data,
-    setupEmailSent,
+  const profile = {
+    uid: uid.trim(),
+    fullName: fullName.trim(),
+    displayName: fullName.trim(),
+    email: email.trim().toLowerCase(),
+    phone: phone.trim(),
+    employeeId: employeeId?.trim() || '',
+    serviceArea: serviceArea?.trim() || '',
+    specialization: specialization?.trim() || '',
+    address: address?.trim() || '',
+    photoURL: photoURL?.trim() || null,
+    role: ROLES.TECHNICIAN,
+    isActive: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   };
+
+  const existingProfile = await getDoc(doc(db, 'users', profile.uid));
+  if (existingProfile.exists()) {
+    throw new Error('A Firestore profile already exists for this Auth UID.');
+  }
+
+  await setDoc(doc(db, 'users', profile.uid), profile);
+  return profile;
 };
 
 /**

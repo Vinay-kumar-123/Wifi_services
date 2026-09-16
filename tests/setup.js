@@ -53,13 +53,6 @@ vi.mock('firebase/storage', () => ({
   getDownloadURL: vi.fn(),
 }));
 
-// ─── Mock Firebase Functions ──────────────────────────────────────────────────
-vi.mock('firebase/functions', () => ({
-  getFunctions: vi.fn(),
-  connectFunctionsEmulator: vi.fn(),
-  httpsCallable: vi.fn(),
-}));
-
 // ─── Mock Firebase App ────────────────────────────────────────────────────────
 vi.mock('firebase/app', () => ({
   initializeApp: vi.fn(() => ({})),

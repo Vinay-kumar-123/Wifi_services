@@ -18,7 +18,6 @@ import {
   orderBy,
   limit,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 
 // ─── Import services under test ────────────────────────────────────────────────
 import {
@@ -354,7 +353,7 @@ describe('Complaint Creation', () => {
 // ─── ADMIN OPERATIONS ─────────────────────────────────────────────────────────
 describe('Admin Complaint Operations', () => {
   const adminUser = makeUser({ uid: 'admin-001', displayName: 'Admin User' });
-  const technician = { uid: 'tech-001', displayName: 'Technician One' };
+  const technician = { uid: 'tech-001', displayName: 'Technician One', isActive: true };
   const complaintId = 'complaint-abc';
   const mockDocRef = makeMockDocRef();
   const mockCollRef = makeMockCollRef();
@@ -365,33 +364,33 @@ describe('Admin Complaint Operations', () => {
     collection.mockReturnValue(mockCollRef);
     addDoc.mockResolvedValue({ id: 'audit-001' });
     updateDoc.mockResolvedValue(undefined);
-    httpsCallable.mockReturnValue(vi.fn().mockResolvedValue({ data: { success: true } }));
   });
 
   it('should assign technician and update status from open to assigned', async () => {
     const complaintData = makeComplaintData({ status: 'open' });
+    getDoc.mockResolvedValue({ exists: () => true, data: () => complaintData });
     await assignTechnicianToComplaint(complaintId, technician, adminUser);
 
-    expect(httpsCallable).toHaveBeenCalledWith(expect.anything(), 'assignTechnician');
-    expect(httpsCallable.mock.results[0].value).toHaveBeenCalledWith({
-      complaintId,
-      technicianId: 'tech-001',
-      assignmentNote: '',
-    });
+    expect(updateDoc).toHaveBeenCalledWith(mockDocRef, expect.objectContaining({
+      status: 'assigned',
+      assignedTechnicianId: 'tech-001',
+      assignedTechnicianName: 'Technician One',
+      dispatchNotes: null,
+    }));
   });
 
-  it('should reassign without changing status if complaint is already past open', async () => {
+  it('should reassign an already assigned complaint through Firestore', async () => {
     const complaintData = makeComplaintData({
-      status: 'accepted',
+      status: 'assigned',
       assignedTechnicianId: 'old-tech',
     });
+    getDoc.mockResolvedValue({ exists: () => true, data: () => complaintData });
     await assignTechnicianToComplaint(complaintId, technician, adminUser, { isReassignment: true });
 
-    expect(httpsCallable.mock.results[0].value).toHaveBeenCalledWith({
-      complaintId,
-      technicianId: 'tech-001',
-      assignmentNote: '',
-    });
+    expect(updateDoc).toHaveBeenCalledWith(mockDocRef, expect.objectContaining({
+      status: 'assigned',
+      assignedTechnicianId: 'tech-001',
+    }));
   });
 
   it('should close a complaint and set status to closed', async () => {

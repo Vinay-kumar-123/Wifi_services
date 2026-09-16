@@ -20,7 +20,6 @@ import {
   addDoc,
   serverTimestamp,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 
 import {
   registerUser,
@@ -91,13 +90,11 @@ describe('User Registration & Default Role', () => {
     expect(setDocCall.role).not.toBe('technician');
   });
 
-  it('should create a technician account with role: technician and isActive: true', async () => {
-    const createTechnician = vi.fn().mockResolvedValue({
-      data: { uid: 'tech-user-001', setupEmailQueued: true },
-    });
-    httpsCallable.mockReturnValue(createTechnician);
+  it('should create a technician profile for a manually-created Auth account', async () => {
+    getDoc.mockResolvedValue({ exists: () => false });
 
     await createTechnicianAccount({
+      uid: 'tech-user-001',
       fullName: 'Tech User',
       email: 'tech@test.com',
       phone: '+1 (555) 123-4567',
@@ -106,18 +103,19 @@ describe('User Registration & Default Role', () => {
       specialization: 'Broadband diagnostics',
     });
 
-    expect(httpsCallable).toHaveBeenCalledWith(expect.anything(), 'createTechnician');
-    expect(createTechnician).toHaveBeenCalledWith(expect.objectContaining({
-      email: 'tech@test.com',
+    expect(setDoc).toHaveBeenCalledWith(mockDocRef, expect.objectContaining({
+      uid: 'tech-user-001',
+      role: 'technician',
+      isActive: true,
     }));
-    expect(sendPasswordResetEmail).toHaveBeenCalledWith(expect.anything(), 'tech@test.com');
   });
 
-  it('should reject duplicate technician emails before creating auth user', async () => {
-    httpsCallable.mockReturnValue(vi.fn().mockRejectedValue(new Error('A user with this email already exists.')));
+  it('should reject an existing technician profile before overwriting it', async () => {
+    getDoc.mockResolvedValue({ exists: () => true });
 
     await expect(
       createTechnicianAccount({
+        uid: 'tech-user-001',
         fullName: 'Tech User',
         email: 'tech@test.com',
         phone: '+1 (555) 123-4567',

@@ -139,11 +139,7 @@ export const AdminUsersPage = () => {
         ...payload,
       });
 
-      toast.success(
-        result.setupEmailSent
-          ? 'Technician created. Account setup email sent.'
-          : 'Technician created, but the setup email could not be sent.'
-      );
+      toast.success(`Technician profile created for Auth UID ${result.uid}.`);
       setTechnicianModalOpen(false);
       applyTab('technician');
     } catch (err) {

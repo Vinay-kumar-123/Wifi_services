@@ -30,7 +30,7 @@ export const ComplaintTimeline = ({ complaint }) => {
       title: 'Technician Assigned',
       description: complaint.assignedTechnicianName
         ? `Assigned to ${complaint.assignedTechnicianName}`
-        : 'Awaiting admin manual assignment',
+        : 'Technician Assigned',
       icon: UserCheck,
       timestamp: complaint.assignedAt || null,
     },

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, UserPlus, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 
 const initialForm = {
+  uid: '',
   fullName: '',
   email: '',
   phone: '',
@@ -30,6 +31,10 @@ export const AddTechnicianModal = ({ isOpen, onClose, onSubmit, isLoading = fals
 
     if (!trimmedName || trimmedName.length < 2) {
       nextErrors.fullName = 'Full name is required.';
+    }
+
+    if (!form.uid.trim()) {
+      nextErrors.uid = 'The Firebase Authentication UID is required.';
     }
 
     if (!trimmedEmail || !emailRegex.test(trimmedEmail)) {
@@ -111,7 +116,7 @@ export const AddTechnicianModal = ({ isOpen, onClose, onSubmit, isLoading = fals
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900">Add Technician</h3>
-              <p className="text-xs text-slate-500">Create a new field technician account</p>
+              <p className="text-xs text-slate-500">Create a profile for an existing Auth account</p>
             </div>
           </div>
 
@@ -126,7 +131,26 @@ export const AddTechnicianModal = ({ isOpen, onClose, onSubmit, isLoading = fals
         </div>
 
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            Technician authentication account must currently be created in Firebase Authentication. After creating the account, add the technician profile using the provided UID.
+          </div>
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Firebase Authentication UID
+              </label>
+              <input
+                type="text"
+                name="uid"
+                value={form.uid}
+                onChange={handleChange}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                placeholder="Paste the UID from Firebase Authentication"
+              />
+              {errors.uid && <p className="mt-1 text-xs text-rose-600">{errors.uid}</p>}
+            </div>
+
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
                 Full name
@@ -244,7 +268,7 @@ export const AddTechnicianModal = ({ isOpen, onClose, onSubmit, isLoading = fals
           </div>
 
           <p className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800">
-            The technician will receive an account setup email and choose their own password. No password is stored by this form.
+            This form only creates the Firestore profile. It does not create an Authentication account, send a password email, or store a password.
           </p>
 
           {submitMessage && (
@@ -282,10 +306,10 @@ export const AddTechnicianModal = ({ isOpen, onClose, onSubmit, isLoading = fals
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                  Creating Technician...
+                  Saving Profile...
                 </>
               ) : (
-                'Create Technician'
+                'Save Technician Profile'
               )}
             </button>
           </div>
